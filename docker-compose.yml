@@ -1,0 +1,17 @@
+services:
+  file-server:
+    container_name: file-share
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - FILE_SHARE_DATA_DIR=/app/data
+      - FILE_SHARE_MAX_SIZE=${FILE_SHARE_MAX_SIZE:-2147483648}  # 2GB in bytes
+      - FILE_SHARE_RETENTION_DAYS=${FILE_SHARE_RETENTION_DAYS:-14}
+      - FILE_SHARE_CLEANUP_TIME=${FILE_SHARE_CLEANUP_TIME:-03:00}
+      - FILE_SHARE_UPLOADS_LIMIT=${FILE_SHARE_UPLOADS_LIMIT:-15} # limit of upload per day
+    restart: always
