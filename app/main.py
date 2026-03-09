@@ -212,34 +212,50 @@ async def upload_file(
     
     file_uid = str(uuid.uuid4())
     file_path = os.path.join(DATA_DIR, file_uid)
-    
-    content = await file.read(MAX_FILE_SIZE + 1)
-    if len(content) > MAX_FILE_SIZE:
-        max_size_in_gb = MAX_FILE_SIZE / (1024 * 1024 * 1024)
-        logger.warning(f"File upload rejected - too large: {len(content)} bytes from {client_ip}")
-        raise HTTPException(
-            status_code=413, 
-            detail=f"File too large, max size is {max_size_in_gb:.2f} GB"
-        )
-    
-    with open(file_path, "wb") as f:
-        f.write(content)
-    
+
+    total_size = 0
+    chunk_size = 1024 * 1024  # 1MB chunks
+    max_size_in_gb = MAX_FILE_SIZE / (1024 * 1024 * 1024)
+
+    try:
+        with open(file_path, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_FILE_SIZE:
+                    f.close()
+                    os.remove(file_path)
+                    logger.warning(f"File upload rejected - too large: >{total_size} bytes from {client_ip}")
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large, max size is {max_size_in_gb:.2f} GB"
+                    )
+                f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        logger.error(f"Upload error from {client_ip}: {e}")
+        raise HTTPException(status_code=500, detail="Upload failed")
+
     metadata = load_metadata()
     expiry_time = (datetime.now() + timedelta(days=RETENTION_DAYS)).timestamp()
-    
+
     metadata[file_uid] = {
         "original_filename": original_filename,
-        "size": len(content),
+        "size": total_size,
         "upload_date": datetime.now().timestamp(),
         "expiry": expiry_time,
         "uploader_ip": client_ip
     }
-    
+
     save_metadata(metadata)
-    
-    logger.info(f"File uploaded: {file_uid}, {original_filename}, {len(content)} bytes from {client_ip}")
-    
+
+    logger.info(f"File uploaded: {file_uid}, {original_filename}, {total_size} bytes from {client_ip}")
+
     return {
         "message": "File uploaded successfully",
         "download_url": f"/download/{file_uid}/{original_filename}",
