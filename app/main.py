@@ -7,7 +7,7 @@ from logging.handlers import TimedRotatingFileHandler
 from collections import defaultdict
 from datetime import datetime, timedelta
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -45,7 +45,7 @@ file_handler = TimedRotatingFileHandler(
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 
-app = FastAPI(title="Temporary File Sharing Service")
+app = FastAPI(title="Temporary File Sharing Service", docs_url="/docs", redoc_url=None)
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,9 +194,105 @@ def check_upload_limit(ip: str):
     upload_tracker[ip]["count"] += 1
     return True
 
-@app.get("/")
+UPLOAD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>File Upload</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#161616;border:1px solid #2a2a2a;border-radius:12px;padding:2.5rem;width:100%;max-width:480px;margin:1rem}
+h1{font-size:1.4rem;font-weight:600;margin-bottom:1.5rem;color:#fff}
+.drop{border:2px dashed #333;border-radius:8px;padding:3rem 1.5rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+.drop.over{border-color:#4a9eff;background:#4a9eff0a}
+.drop p{color:#888;font-size:.95rem}
+.drop .icon{font-size:2rem;margin-bottom:.5rem;display:block}
+.file-name{margin-top:1rem;font-size:.85rem;color:#aaa;word-break:break-all}
+input[type=file]{display:none}
+button{width:100%;margin-top:1.2rem;padding:.75rem;background:#4a9eff;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:500;cursor:pointer;transition:opacity .2s}
+button:disabled{opacity:.4;cursor:default}
+button:hover:not(:disabled){opacity:.85}
+.progress{margin-top:1rem;display:none}
+.progress-bar{height:6px;background:#222;border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;width:0;background:#4a9eff;transition:width .3s}
+.progress-text{font-size:.8rem;color:#888;margin-top:.4rem;text-align:right}
+.result{margin-top:1.2rem;display:none;padding:1rem;background:#1a2a1a;border:1px solid #2a3a2a;border-radius:8px}
+.result a{color:#4a9eff;word-break:break-all;text-decoration:none}
+.result a:hover{text-decoration:underline}
+.result .expiry{font-size:.8rem;color:#888;margin-top:.4rem}
+.error{margin-top:1rem;color:#ff6b6b;font-size:.85rem;display:none}
+footer{margin-top:1.5rem;text-align:center;font-size:.75rem;color:#555}
+footer a{color:#666;text-decoration:none}
+footer a:hover{color:#999}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Upload a file</h1>
+<div class="drop" id="drop">
+  <span class="icon">&#8593;</span>
+  <p>Drop a file here or click to browse</p>
+  <div class="file-name" id="fileName"></div>
+</div>
+<input type="file" id="fileInput">
+<button id="uploadBtn" disabled>Upload</button>
+<div class="progress" id="progress">
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="progress-text" id="progressText">0%</div>
+</div>
+<div class="error" id="error"></div>
+<div class="result" id="result">
+  <a id="link" href="#" target="_blank"></a>
+  <div class="expiry" id="expiry"></div>
+</div>
+<footer><a href="/docs">API docs</a> &middot; <a href="https://github.com/hippiiee/Simple-python-file-sharing">GitHub</a></footer>
+</div>
+<script>
+const drop=document.getElementById('drop'),fileInput=document.getElementById('fileInput'),
+  fileName=document.getElementById('fileName'),uploadBtn=document.getElementById('uploadBtn'),
+  progress=document.getElementById('progress'),progressFill=document.getElementById('progressFill'),
+  progressText=document.getElementById('progressText'),result=document.getElementById('result'),
+  link=document.getElementById('link'),expiry=document.getElementById('expiry'),
+  error=document.getElementById('error');
+let selectedFile=null;
+drop.addEventListener('click',()=>fileInput.click());
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
+drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files.length)pick(e.dataTransfer.files[0])});
+fileInput.addEventListener('change',()=>{if(fileInput.files.length)pick(fileInput.files[0])});
+function pick(f){selectedFile=f;fileName.textContent=f.name+' ('+fmt(f.size)+')';uploadBtn.disabled=false;result.style.display='none';error.style.display='none'}
+function fmt(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(2)+' GB'}
+uploadBtn.addEventListener('click',()=>{
+  if(!selectedFile)return;
+  const fd=new FormData();fd.append('file',selectedFile);
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/upload/');
+  uploadBtn.disabled=true;progress.style.display='block';error.style.display='none';result.style.display='none';
+  xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);progressFill.style.width=p+'%';progressText.textContent=fmt(e.loaded)+' / '+fmt(e.total)+' ('+p+'%)'}};
+  xhr.onload=()=>{
+    progress.style.display='none';
+    if(xhr.status===200){
+      const r=JSON.parse(xhr.responseText);
+      const url=location.origin+r.download_url;
+      link.href=url;link.textContent=url;
+      expiry.textContent='Expires: '+r.expiry_date;
+      result.style.display='block';selectedFile=null;fileName.textContent='';
+    } else {
+      let msg='Upload failed';try{msg=JSON.parse(xhr.responseText).detail}catch(e){}
+      error.textContent=msg;error.style.display='block';uploadBtn.disabled=false;
+    }
+  };
+  xhr.onerror=()=>{progress.style.display='none';error.textContent='Network error';error.style.display='block';uploadBtn.disabled=false};
+  xhr.send(fd);
+});
+</script>
+</body>
+</html>"""
+
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return RedirectResponse(url="/docs")
+    return UPLOAD_HTML
 
 @app.post("/upload/")
 async def upload_file(
